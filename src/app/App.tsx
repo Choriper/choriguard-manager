@@ -6,6 +6,7 @@ import { GroupsPage } from './pages/GroupsPage';
 import { ServersPage } from './pages/ServersPage';
 import { BansPage } from './pages/BansPage';
 import { EAAccountsPage } from './pages/EAAccountsPage';
+import { PlayerPage } from './pages/PlayerPage';
 
 function AppContent() {
   const { user, loading } = useAuth();
@@ -31,6 +32,7 @@ function AppContent() {
           <Route path="/servers" element={<ServersPage />} />
           <Route path="/bans" element={<BansPage />} />
           <Route path="/ea-accounts" element={<EAAccountsPage />} />
+          <Route path="/player" element={<PlayerPage />} />
         </Routes>
       </main>
     </div>

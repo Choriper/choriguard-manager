@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { Users, Server, Shield, UserCircle, LogOut } from 'lucide-react';
+import { Users, Server, Shield, UserCircle, LogOut, Search } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 export function Sidebar() {
@@ -9,6 +9,7 @@ export function Sidebar() {
   const links = [
     { to: '/', label: 'Groups', icon: Users },
     { to: '/servers', label: 'Servers', icon: Server },
+    { to: '/player', label: 'Player', icon: Search },
     { to: '/bans', label: 'Bans', icon: Shield },
     { to: '/ea-accounts', label: 'EA Accounts', icon: UserCircle },
   ];

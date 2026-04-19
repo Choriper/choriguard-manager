@@ -16,6 +16,7 @@ import {
   Eye,
   Lock,
   Pencil,
+  FileText,
 } from 'lucide-react';
 import {
   groupsAPI,
@@ -48,7 +49,32 @@ interface GroupListResponse {
   items: GroupApiItem[];
 }
 
-type GroupTab = 'server' | 'linked_accounts' | 'admins' | 'bans' | 'vips' | 'security';
+interface WorkerActionLogItem {
+  group_id: string;
+  game_id: string | null;
+  server_id: string | null;
+  playground_id: string | null;
+  server_name: string | null;
+  player_id: string | null;
+  account_id: string | null;
+  name: string | null;
+  loc: number | null;
+  action_type: string;
+  action_source: string;
+  raw: Record<string, any> | null;
+  created_at: string;
+}
+
+interface WorkerActionLogsResponse {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  has_next: boolean;
+  items: WorkerActionLogItem[];
+}
+
+type GroupTab = 'server' | 'linked_accounts' | 'admins' | 'bans' | 'vips' | 'security' | 'logs';
 
 const REGION_OPTIONS = [
   { value: 'aws-bom', label: 'IN Mumbai, Índia' },
@@ -260,6 +286,13 @@ function GroupManagePage({ groupId }: { groupId: string }) {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<GroupTab>('server');
 
+  const [linkedAccountsError, setLinkedAccountsError] = useState<string | null>(null);
+  const [linkedAccountsLoading, setLinkedAccountsLoading] = useState(false);
+  const [linkedAccountsLoaded, setLinkedAccountsLoaded] = useState(false);
+
+  const [allAccountsLoading, setAllAccountsLoading] = useState(false);
+  const [allAccountsLoaded, setAllAccountsLoaded] = useState(false);
+
   const [showLinkEaModal, setShowLinkEaModal] = useState(false);
   const [selectedEaPd, setSelectedEaPd] = useState('');
   const [linkingEa, setLinkingEa] = useState(false);
@@ -275,13 +308,21 @@ function GroupManagePage({ groupId }: { groupId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   const availableAccounts = useMemo(() => {
+    if (!allAccountsLoaded) return [];
+
     const linkedSet = new Set(linkedAccounts.map((acc) => acc.ea_pd));
     return allAccounts.filter((acc) => !linkedSet.has(acc.ea_pd));
-  }, [allAccounts, linkedAccounts]);
+  }, [allAccounts, linkedAccounts, allAccountsLoaded]);
 
   useEffect(() => {
     loadGroupData();
   }, [groupId]);
+
+  useEffect(() => {
+    if (activeTab === 'linked_accounts') {
+      loadLinkedAccounts();
+    }
+  }, [activeTab, groupId]);
 
   useEffect(() => {
     if (activeTab !== 'server') return;
@@ -300,27 +341,79 @@ function GroupManagePage({ groupId }: { groupId: string }) {
     return () => clearInterval(interval);
   }, [activeTab, servers]);
 
+  const handleOpenLinkEaModal = async () => {
+    await loadLinkedAccounts();
+    await loadAllAccounts();
+    setShowLinkEaModal(true);
+  };
+
+  const handleOpenAddServerModal = async () => {
+    await loadLinkedAccounts();
+    setShowAddServerModal(true);
+  };
+
   const loadGroupData = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      const [groupData, linkedData, allAccountsData, serversData] = await Promise.all([
+      const [groupData, serversData] = await Promise.all([
         groupsAPI.get(groupId),
-        groupsAPI.getAccounts(groupId),
-        eaAccountsAPI.list(),
         serversAPI.list(groupId),
       ]);
 
       setGroup(groupData);
-      setLinkedAccounts(Array.isArray(linkedData) ? linkedData : []);
-      setAllAccounts(Array.isArray(allAccountsData) ? allAccountsData : []);
       setServers(Array.isArray(serversData?.items) ? serversData.items : []);
     } catch (err) {
       console.error('Failed to load group data:', err);
       setError('Não foi possível carregar os dados do grupo.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadLinkedAccounts = async (force = false) => {
+    if (linkedAccountsLoading) return;
+    if (linkedAccountsLoaded && !force) return;
+
+    try {
+      setLinkedAccountsLoading(true);
+      setLinkedAccountsError(null);
+
+      const linkedData = await groupsAPI.getAccounts(groupId);
+      setLinkedAccounts(Array.isArray(linkedData) ? linkedData : []);
+      setLinkedAccountsLoaded(true);
+    } catch (error: any) {
+      console.error('Failed to load linked EA accounts:', error);
+
+      const detail =
+        error?.detail ||
+        error?.message ||
+        'Não foi possível carregar as contas EA vinculadas.';
+
+      setLinkedAccounts([]);
+      setLinkedAccountsError(detail);
+      setLinkedAccountsLoaded(true);
+    } finally {
+      setLinkedAccountsLoading(false);
+    }
+  };
+
+  const loadAllAccounts = async (force = false) => {
+    if (allAccountsLoading) return;
+    if (allAccountsLoaded && !force) return;
+
+    try {
+      setAllAccountsLoading(true);
+      const allAccountsData = await eaAccountsAPI.list();
+      setAllAccounts(Array.isArray(allAccountsData) ? allAccountsData : []);
+      setAllAccountsLoaded(true);
+    } catch (error) {
+      console.error('Failed to load all EA accounts:', error);
+      setAllAccounts([]);
+      setAllAccountsLoaded(true);
+    } finally {
+      setAllAccountsLoading(false);
     }
   };
 
@@ -337,7 +430,8 @@ function GroupManagePage({ groupId }: { groupId: string }) {
       await eaAccountsAPI.link(groupId, { ea_pd: selectedEaPd });
       setSelectedEaPd('');
       setShowLinkEaModal(false);
-      await loadGroupData();
+
+      await loadLinkedAccounts(true);
     } catch (error) {
       console.error('Failed to link EA account:', error);
       alert('Falha ao vincular conta EA ao grupo.');
@@ -352,7 +446,7 @@ function GroupManagePage({ groupId }: { groupId: string }) {
     try {
       setUnlinkingEaPd(eaPd);
       await eaAccountsAPI.unlink(groupId, eaPd);
-      await loadGroupData();
+      await loadLinkedAccounts(true);
     } catch (error) {
       console.error('Failed to unlink EA account:', error);
       alert('Falha ao desvincular conta EA do grupo.');
@@ -574,6 +668,12 @@ function GroupManagePage({ groupId }: { groupId: string }) {
           icon={<Lock className="w-4 h-4" />}
           label="Security"
         />
+        <TabButton
+          active={activeTab === 'logs'}
+          onClick={() => setActiveTab('logs')}
+          icon={<FileText className="w-4 h-4" />}
+          label="Logs"
+        />
       </div>
 
       {activeTab === 'server' && (
@@ -582,7 +682,7 @@ function GroupManagePage({ groupId }: { groupId: string }) {
           linkedAccounts={linkedAccounts}
           servers={servers}
           serverStatusMap={serverStatusMap}
-          onAddServer={() => setShowAddServerModal(true)}
+          onAddServer={handleOpenAddServerModal}
           onUnlinkServer={handleUnlinkServer}
           onCheckStatus={handleCheckServerStatus}
           onStartServer={handleStartServer}
@@ -596,7 +696,9 @@ function GroupManagePage({ groupId }: { groupId: string }) {
       {activeTab === 'linked_accounts' && (
         <LinkedAccountsTab
           linkedAccounts={linkedAccounts}
-          onLinkEa={() => setShowLinkEaModal(true)}
+          loading={linkedAccountsLoading}
+          error={linkedAccountsError}
+          onLinkEa={handleOpenLinkEaModal}
           onUnlinkEa={handleUnlinkEaAccount}
           unlinkingEaPd={unlinkingEaPd}
         />
@@ -616,6 +718,10 @@ function GroupManagePage({ groupId }: { groupId: string }) {
 
       {activeTab === 'security' && (
         <SecurityTab groupId={groupId} />
+      )}
+
+      {activeTab === 'logs' && (
+        <LogsTab groupId={groupId} />
       )}
 
       {showLinkEaModal && (
@@ -747,19 +853,13 @@ function ServerTab({
 
         <button
           onClick={onAddServer}
-          disabled={linkedAccounts.length === 0}
+          disabled={false}
           className="flex items-center gap-2 bg-white text-black px-4 py-2 rounded-lg hover:bg-zinc-100 transition-colors disabled:opacity-50"
         >
           <Plus className="w-4 h-4" />
           Add Server
         </button>
       </div>
-
-      {linkedAccounts.length === 0 && (
-        <div className="mb-4 rounded-lg border border-yellow-800 bg-yellow-950/30 px-4 py-3 text-yellow-300 text-sm">
-          Vincule pelo menos uma conta EA ao grupo antes de adicionar servers.
-        </div>
-      )}
 
       {servers.length === 0 ? (
         <div className="text-zinc-400">
@@ -1264,11 +1364,15 @@ function EditAdminModal({
 
 function LinkedAccountsTab({
   linkedAccounts,
+  loading,
+  error,
   onLinkEa,
   onUnlinkEa,
   unlinkingEaPd,
 }: {
   linkedAccounts: GroupLinkedEaAccount[];
+  loading: boolean;
+  error: string | null;
   onLinkEa: () => void;
   onUnlinkEa: (eaPd: string) => void;
   unlinkingEaPd: string | null;
@@ -1292,7 +1396,13 @@ function LinkedAccountsTab({
         </button>
       </div>
 
-      {linkedAccounts.length === 0 ? (
+      {loading ? (
+        <div className="text-zinc-400">Loading...</div>
+      ) : error ? (
+        <div className="rounded-lg border border-yellow-800 bg-yellow-950/30 px-4 py-3 text-yellow-300">
+          {error}
+        </div>
+      ) : linkedAccounts.length === 0 ? (
         <div className="text-zinc-400">
           Nenhuma conta EA vinculada a este grupo.
         </div>
@@ -1362,6 +1472,295 @@ function LinkedAccountsTab({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function LogsTab({ groupId }: { groupId: string }) {
+  const [logs, setLogs] = useState<WorkerActionLogItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+
+  const [filters, setFilters] = useState({
+    action_type: '',
+    action_source: '',
+    server_id: '',
+    player_id: '',
+    account_id: '',
+    name: '',
+  });
+
+  useEffect(() => {
+    loadLogs();
+  }, [groupId, page, pageSize]);
+
+  const loadLogs = async (customPage?: number) => {
+    try {
+      setLoading(true);
+
+      const currentPage = customPage ?? page;
+
+      const params = new URLSearchParams();
+      params.set('page', String(currentPage));
+      params.set('page_size', String(pageSize));
+
+      if (filters.action_type.trim()) params.set('action_type', filters.action_type.trim());
+      if (filters.action_source.trim()) params.set('action_source', filters.action_source.trim());
+      if (filters.server_id.trim()) params.set('server_id', filters.server_id.trim());
+      if (filters.player_id.trim()) params.set('player_id', filters.player_id.trim());
+      if (filters.account_id.trim()) params.set('account_id', filters.account_id.trim());
+      if (filters.name.trim()) params.set('name', filters.name.trim());
+
+      const response = await fetch(`/api/groups/${groupId}/worker-action-logs?${params.toString()}`, {
+        credentials: 'include',
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.detail || 'Falha ao carregar logs.');
+      }
+
+      const parsed = data as WorkerActionLogsResponse;
+
+      setLogs(Array.isArray(parsed.items) ? parsed.items : []);
+      setTotal(parsed.total || 0);
+      setTotalPages(parsed.total_pages || 1);
+
+      if (customPage != null) {
+        setPage(customPage);
+      }
+    } catch (error) {
+      console.error('Failed to load logs:', error);
+      setLogs([]);
+      setTotal(0);
+      setTotalPages(1);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleApplyFilters = (e: React.FormEvent) => {
+    e.preventDefault();
+    setPage(1);
+    loadLogs(1);
+  };
+
+  const handleClearFilters = () => {
+    setFilters({
+      action_type: '',
+      action_source: '',
+      server_id: '',
+      player_id: '',
+      account_id: '',
+      name: '',
+    });
+    setPage(1);
+
+    setTimeout(() => {
+      loadLogs(1);
+    }, 0);
+  };
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
+      <div className="flex items-center justify-between mb-6 gap-4">
+        <div>
+          <h2 className="text-lg text-white">Logs</h2>
+          <p className="text-zinc-400 text-sm">
+            Histórico de ações do worker do grupo
+          </p>
+        </div>
+
+        <div className="text-sm text-zinc-400">
+          Total: <span className="text-white">{total}</span>
+        </div>
+      </div>
+
+      <form onSubmit={handleApplyFilters} className="grid md:grid-cols-2 xl:grid-cols-3 gap-4 mb-6">
+        <input
+          type="text"
+          placeholder="action_type"
+          value={filters.action_type}
+          onChange={(e) => setFilters((prev) => ({ ...prev, action_type: e.target.value }))}
+          className="bg-zinc-800 border border-zinc-700 text-white px-4 py-2 rounded-lg focus:outline-none focus:border-zinc-600"
+        />
+
+        <input
+          type="text"
+          placeholder="action_source"
+          value={filters.action_source}
+          onChange={(e) => setFilters((prev) => ({ ...prev, action_source: e.target.value }))}
+          className="bg-zinc-800 border border-zinc-700 text-white px-4 py-2 rounded-lg focus:outline-none focus:border-zinc-600"
+        />
+
+        <input
+          type="text"
+          placeholder="server_id"
+          value={filters.server_id}
+          onChange={(e) => setFilters((prev) => ({ ...prev, server_id: e.target.value }))}
+          className="bg-zinc-800 border border-zinc-700 text-white px-4 py-2 rounded-lg focus:outline-none focus:border-zinc-600"
+        />
+
+        <input
+          type="text"
+          placeholder="player_id"
+          value={filters.player_id}
+          onChange={(e) => setFilters((prev) => ({ ...prev, player_id: e.target.value }))}
+          className="bg-zinc-800 border border-zinc-700 text-white px-4 py-2 rounded-lg focus:outline-none focus:border-zinc-600"
+        />
+
+        <input
+          type="text"
+          placeholder="account_id"
+          value={filters.account_id}
+          onChange={(e) => setFilters((prev) => ({ ...prev, account_id: e.target.value }))}
+          className="bg-zinc-800 border border-zinc-700 text-white px-4 py-2 rounded-lg focus:outline-none focus:border-zinc-600"
+        />
+
+        <input
+          type="text"
+          placeholder="name"
+          value={filters.name}
+          onChange={(e) => setFilters((prev) => ({ ...prev, name: e.target.value }))}
+          className="bg-zinc-800 border border-zinc-700 text-white px-4 py-2 rounded-lg focus:outline-none focus:border-zinc-600"
+        />
+
+        <div className="md:col-span-2 xl:col-span-3 flex gap-3">
+          <button
+            type="submit"
+            className="px-4 py-2 bg-white text-black rounded-lg hover:bg-zinc-100 transition-colors"
+          >
+            Filtrar
+          </button>
+
+          <button
+            type="button"
+            onClick={handleClearFilters}
+            className="px-4 py-2 border border-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-800 transition-colors"
+          >
+            Limpar
+          </button>
+
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setPage(1);
+            }}
+            className="ml-auto bg-zinc-800 border border-zinc-700 text-white px-4 py-2 rounded-lg focus:outline-none focus:border-zinc-600"
+          >
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </div>
+      </form>
+
+      {loading ? (
+        <div className="text-zinc-400">Loading...</div>
+      ) : logs.length === 0 ? (
+        <div className="text-zinc-400">Nenhum log encontrado.</div>
+      ) : (
+        <div className="grid gap-4">
+          {logs.map((log, index) => (
+            <div
+              key={`${log.created_at}-${log.player_id || index}`}
+              className="border border-zinc-800 rounded-lg p-4 bg-zinc-950/40"
+            >
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                <span className="px-2 py-1 rounded-full border border-blue-800 bg-blue-950/30 text-blue-300 text-xs">
+                  {log.action_type}
+                </span>
+
+                <span className="px-2 py-1 rounded-full border border-zinc-700 bg-zinc-800 text-zinc-300 text-xs">
+                  {log.action_source}
+                </span>
+
+                <span className="text-zinc-500 text-sm ml-auto">
+                  {new Date(log.created_at).toLocaleString('pt-BR')}
+                </span>
+              </div>
+
+              <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-2 text-sm">
+                <div>
+                  <span className="text-zinc-500">Name:</span>
+                  <span className="text-white ml-2">{log.name || '-'}</span>
+                </div>
+
+                <div>
+                  <span className="text-zinc-500">Player ID:</span>
+                  <span className="text-white ml-2 font-mono">{log.player_id || '-'}</span>
+                </div>
+
+                <div>
+                  <span className="text-zinc-500">Account ID:</span>
+                  <span className="text-white ml-2 font-mono">{log.account_id || '-'}</span>
+                </div>
+
+                <div>
+                  <span className="text-zinc-500">Game ID:</span>
+                  <span className="text-white ml-2 font-mono">{log.game_id || '-'}</span>
+                </div>
+
+                <div>
+                  <span className="text-zinc-500">Server:</span>
+                  <span className="text-white ml-2">{log.server_name || '-'}</span>
+                </div>
+
+                <div>
+                  <span className="text-zinc-500">Playground ID:</span>
+                  <span className="text-white ml-2 font-mono">{log.playground_id || '-'}</span>
+                </div>
+
+                <div>
+                  <span className="text-zinc-500">LOC:</span>
+                  <span className="text-white ml-2 font-mono">{log.loc ?? '-'}</span>
+                </div>
+              </div>
+
+              {log.raw && (
+                <details className="mt-4">
+                  <summary className="cursor-pointer text-zinc-300 hover:text-white">
+                    Ver raw
+                  </summary>
+                  <pre className="mt-3 rounded-lg bg-black/40 border border-zinc-800 p-4 text-xs text-zinc-300 overflow-x-auto whitespace-pre-wrap break-words">
+                    {JSON.stringify(log.raw, null, 2)}
+                  </pre>
+                </details>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex items-center justify-between mt-6">
+        <button
+          type="button"
+          onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+          disabled={page <= 1}
+          className="px-4 py-2 border border-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"
+        >
+          Anterior
+        </button>
+
+        <div className="text-sm text-zinc-400">
+          Página <span className="text-white">{page}</span> de{' '}
+          <span className="text-white">{totalPages}</span>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+          disabled={page >= totalPages}
+          className="px-4 py-2 border border-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"
+        >
+          Próxima
+        </button>
+      </div>
     </div>
   );
 }
